@@ -1,0 +1,164 @@
+Parameters:
+  DBName:
+    Description: Name of glue database
+    Type: String
+    Default: test_db
+  BucketName:
+    Description: Name of bucket where glue db refers to
+    Type: String
+    Default: your-initials-test-bucket-for-glue-db
+  FilePrefix:
+    Description: Bucket prefix where database will refer to
+    Type: String
+    Default: test_prefix
+  CrawlerName:
+    Description: Name of crawler
+    Type: String
+    Default: glue-crawler-test
+  RoleName:
+    Description: Name of glue role
+    Type: String
+    Default: glue-crawler-role
+  RedshiftRoleName:
+    Description: Role to be assumed by redshift cluster
+    Type: String
+    Default: MyRedshiftRole
+  ClusterName:
+    Description: Name of Redshift Cluster
+    Type: String
+    Default: examplecluster
+  RedshiftDBName:
+    Description: Name of first Redshift Database
+    Type: String
+    Default: my_redshift_db
+  RedshiftMasterUsername:
+    Description: username for master user
+    Type: String
+    Default: awsuser
+  RedshiftMasterUserPassword:
+    Description: Password for master user
+    Type: String
+    Default: DefaultPassword123
+
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "AES256"
+
+  GlueDatabase:
+    DependsOn: [ S3Bucket ]
+    Type: AWS::Glue::Database
+    Properties:
+      DatabaseInput:
+        Description: Example Database CFN
+        Name: !Ref DBName
+        LocationUri: !Sub "s3://${BucketName}/${FilePrefix}"
+      CatalogId: !Ref "AWS::AccountId"
+
+  GlueCrawler:
+    DependsOn: [ GlueRole, S3Bucket ]
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Ref CrawlerName
+      DatabaseName: !Ref DBName
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/${RoleName}"
+      SchemaChangePolicy: 
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"Grouping\":{\"TableGroupingPolicy\":\"CombineCompatibleSchemas\"},\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"}}}"     
+      Targets: 
+        S3Targets: 
+          - Path: !Sub "s3://${BucketName}/${FilePrefix}"
+
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: glueServicePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - 'glue:*'
+                  - 'glue:GetTemporaryCredentials'
+                  - 'iam:List*'
+                  - 'iam:Get*'
+                  - 'cloudwatch:PutMetricData'
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action:
+                  - 's3:CreateBucket'
+                  - 's3:Get*'
+                  - 's3:List*'
+                Resource:
+                  - 'arn:aws:s3:::aws-glue-*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateTags'
+                  - 'ec2:DeleteTags'
+                  - 'ec2:Describe*'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action:
+                  - 's3:Get*'
+                  - 's3:List*'
+                  - 's3:*' # TODO Remove
+                Resource:
+                  - !Sub "arn:aws:s3:::${BucketName}"
+                  - !Sub "arn:aws:s3:::${BucketName}/*"
+
+  RedshiftRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RedshiftRoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: redshift.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+
+  RedshiftCluster:
+    Type: AWS::Redshift::Cluster
+    DependsOn:
+    - RedshiftRole
+    Properties:
+      ClusterIdentifier: !Ref ClusterName
+      ClusterType: multi-node
+      DBName: !Ref RedshiftDBName
+      NodeType: dc2.large
+      NumberOfNodes: 2
+      Port: 5439
+      MasterUsername: !Ref RedshiftMasterUsername
+      MasterUserPassword: !Ref RedshiftMasterUserPassword
+      IamRoles:
+        - !GetAtt RedshiftRole.Arn
