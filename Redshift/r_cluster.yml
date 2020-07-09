@@ -1,0 +1,33 @@
+Parameters:
+  ClusterName:
+    Description: Name of Redshift Cluster
+    Type: String
+    Default: examplecluster
+  RedshiftDBName:
+    Description: Name of first Redshift Database
+    Type: String
+    Default: my_redshift_db
+  RedshiftMasterUsername:
+    Description: username for master user
+    Type: String
+    Default: awsuser
+  RedshiftMasterUserPassword:
+    Description: Password for master user
+    Type: String
+    Default: DefaultPassword123
+
+Resources:
+  RedshiftCluster:
+    Type: AWS::Redshift::Cluster
+    Properties:
+      ClusterIdentifier: !Ref ClusterName
+      ClusterType: multi-node
+      DBName: !Ref RedshiftDBName
+      NodeType: dc2.large
+      NumberOfNodes: 2
+      Port: 5439
+      MasterUsername: !Ref RedshiftMasterUsername
+      MasterUserPassword: !Ref RedshiftMasterUserPassword
+
+
+        
