@@ -1,0 +1,366 @@
+Parameters:
+  DBName:
+    Description: Name of glue database
+    Type: String
+    Default: test_db
+  BucketName:
+    Description: Name of bucket where glue db refers to
+    Type: String
+    Default: your-initials-test-bucket-for-glue-db
+  FilePrefix:
+    Description: Bucket prefix where database will refer to
+    Type: String
+    Default: test_prefix
+  CrawlerName:
+    Description: Name of crawler
+    Type: String
+    Default: glue-crawler-test
+  RoleName:
+    Description: Name of glue role
+    Type: String
+    Default: glue-crawler-role
+  RedshiftRoleName:
+    Description: Role to be assumed by redshift cluster
+    Type: String
+    Default: MyRedshiftRole
+  ClusterName:
+    Description: Name of Redshift Cluster
+    Type: String
+    Default: examplecluster
+  RedshiftDBName:
+    Description: Name of first Redshift Database
+    Type: String
+    Default: my_redshift_db
+  RedshiftMasterUsername:
+    Description: username for master user
+    Type: String
+    Default: awsuser
+  RedshiftMasterUserPassword:
+    Description: Password for master user
+    Type: String
+    Default: DefaultPassword123
+
+
+Resources:
+
+############################################################################
+############################ VPC & Subnets #################################
+############################################################################
+
+  rRedshiftVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/27
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  rRsPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+      CidrBlock: 10.0.0.0/28
+      VpcId: !Ref rRedshiftVpc
+      Tags:
+        - Key: Name
+          Value: RsPrivateSubnet
+
+  rRsPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+      CidrBlock: 10.0.0.16/28
+      VpcId: !Ref rRedshiftVpc
+      Tags:
+        - Key: Name
+          Value: RsPublicSubnet     
+
+
+############################################################################
+############################ VPC Endpoints #################################
+############################################################################
+
+  rGlueVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: com.amazonaws.us-east-1.glue
+      VpcId: !Ref rRedshiftVpc
+      SubnetIds:
+        - !Ref rRsPrivateSubnet
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref rRsPrivateSg
+
+  rS3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      ServiceName: com.amazonaws.us-east-1.s3
+      VpcId: !Ref rRedshiftVpc
+      PrivateDnsEnabled: false
+
+
+
+############################################################################
+############################ Security Groups ###############################
+############################################################################
+
+
+  rRsPrivateSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref rRedshiftVpc
+      GroupDescription: Security Group allowing port 5439 from Public SG for Redshift access
+      Tags:
+        - Key: Name
+          Value: RSPrivateSg
+
+  rRedshiftSgIngress1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref rRsPrivateSg
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref rRsPrivateSg
+
+  rRedshiftSgIngress2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref rRsPrivateSg
+      IpProtocol: tcp
+      FromPort: 5439
+      ToPort: 5439
+      SourceSecurityGroupId: !Ref rRsPublicSg
+
+  rRsPublicSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref rRedshiftVpc
+      GroupDescription: Security Group allowing port 5439 from Public SG for Redshift access
+      Tags:
+        - Key: Name
+          Value: RSPublicSg
+
+############################################################################
+############################ Gateways ######################################
+############################################################################
+
+  rIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: RsIgw
+
+  rIgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      InternetGatewayId: !Ref rIgw
+      VpcId: !Ref rRedshiftVpc
+
+  rEip:
+    Type: AWS::EC2::EIP
+    Properties: 
+      Domain: vpc
+      Tags: 
+        - Key: Name
+          Value: RsEip
+
+  rRsNatGw:
+    Type: AWS::EC2::NatGateway
+    Properties: 
+      AllocationId: !GetAtt rEip.AllocationId
+      SubnetId: !Ref rRsPublicSubnet
+      Tags: 
+        - Key: Name
+          Value: RsNatGw
+      
+############################################################################
+############################ Route Tables ##################################
+############################################################################
+
+  rPrivRt:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      Tags: 
+        - Key: Name
+          Value: RsPrivRt
+      VpcId: !Ref rRedshiftVpc
+
+  rPubRt:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      Tags: 
+        - Key: Name
+          Value: RsPubRt
+      VpcId: !Ref rRedshiftVpc
+
+  rPrivRtAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: 
+      RouteTableId: !Ref rPrivRt
+      SubnetId: !Ref rRsPrivateSubnet
+
+  rPubRtAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: 
+      RouteTableId: !Ref rPubRt
+      SubnetId: !Ref rRsPublicSubnet
+
+  rRoutePriv1:
+    Type: AWS::EC2::Route
+    Properties: 
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref rRsNatGw
+      RouteTableId: !Ref rPrivRt
+
+  rRoutePub1:
+    Type: AWS::EC2::Route
+    Properties: 
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref rIgw
+      RouteTableId: !Ref rPubRt
+
+############################################################################
+############################ Other Infra ###################################
+############################################################################
+
+  rS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "AES256"
+
+  rGlueDatabase:
+    DependsOn: [ rS3Bucket ]
+    Type: AWS::Glue::Database
+    Properties:
+      DatabaseInput:
+        Description: Example Database CFN
+        Name: !Ref DBName
+        LocationUri: !Sub "s3://${BucketName}/${FilePrefix}"
+      CatalogId: !Ref "AWS::AccountId"
+
+  rGlueCrawler:
+    DependsOn: [ rGlueRole, rS3Bucket ]
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Ref CrawlerName
+      DatabaseName: !Ref DBName
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/${RoleName}"
+      SchemaChangePolicy: 
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"Grouping\":{\"TableGroupingPolicy\":\"CombineCompatibleSchemas\"},\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"}}}"     
+      Targets: 
+        S3Targets: 
+          - Path: !Sub "s3://${BucketName}/${FilePrefix}"
+
+  rGlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: glueServicePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - 'glue:*'
+                  - 'glue:GetTemporaryCredentials'
+                  - 'iam:List*'
+                  - 'iam:Get*'
+                  - 'cloudwatch:PutMetricData'
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action:
+                  - 's3:CreateBucket'
+                  - 's3:Get*'
+                  - 's3:List*'
+                Resource:
+                  - 'arn:aws:s3:::aws-glue-*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateTags'
+                  - 'ec2:DeleteTags'
+                  - 'ec2:Describe*'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action:
+                  - 's3:Get*'
+                  - 's3:List*'
+                  - 's3:*' # TODO Remove
+                Resource:
+                  - !Sub "arn:aws:s3:::${BucketName}"
+                  - !Sub "arn:aws:s3:::${BucketName}/*"
+                  - arn:aws:s3:::bc-glue-scripts-bucket
+                  - arn:aws:s3:::bc-glue-scripts-bucket/*
+
+
+  rRedshiftRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RedshiftRoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: redshift.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+
+  rRedshiftClusterSubnetGroup:
+    Type: AWS::Redshift::ClusterSubnetGroup
+    Properties: 
+      Description: Allows Redshift to reside in a custom subnet
+      SubnetIds: 
+        - !Ref rRsPrivateSubnet
+
+  rRedshiftCluster:
+    Type: AWS::Redshift::Cluster
+    DependsOn:
+    - rRedshiftRole
+    Properties:
+      ClusterIdentifier: !Ref ClusterName
+      ClusterSubnetGroupName: !Ref rRedshiftClusterSubnetGroup
+      ClusterType: multi-node
+      DBName: !Ref RedshiftDBName
+      NodeType: dc2.large
+      NumberOfNodes: 2
+      Port: 5439
+      PubliclyAccessible: false
+      MasterUsername: !Ref RedshiftMasterUsername
+      MasterUserPassword: !Ref RedshiftMasterUserPassword
+      IamRoles:
+        - !GetAtt rRedshiftRole.Arn
+      VpcSecurityGroupIds:
+        - !Ref rRsPrivateSg

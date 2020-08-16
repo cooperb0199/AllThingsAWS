@@ -1,0 +1,16 @@
+import pg8000
+
+try:
+    database = 'my_redshift_db'
+    host = 'examplecluster.csnxrmldiwms.us-east-1.redshift.amazonaws.com'
+    port = 5439
+    user = 'awsuser'
+    password = 'DefaultPassword123'
+    conn = pg8000.connect(host=host,port=port,database=database,user=user,password=password)
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM public.shoes')
+    result = cursor.fetchall()
+    print(result)
+except Exception as e:
+    print(e)
+    raise e
